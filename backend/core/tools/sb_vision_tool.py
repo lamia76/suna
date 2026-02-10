@@ -63,18 +63,26 @@ class SandboxVisionTool(SandboxToolsBase):
             Tuple of (png_bytes, 'image/png')
         """
         try:
-            # Check if Gemini API key is configured
-            if not config.GEMINI_API_KEY:
-                return self.fail_response("Vision tool is not available. GEMINI_API_KEY is not configured.")
+            # Check if at least one vision API key is configured
+            api_key = config.VISION_API_KEY or config.GEMINI_API_KEY
+            if not api_key:
+                return self.fail_response("Vision tool is not available. Please configure VISION_API_KEY or GEMINI_API_KEY.")
             
             # Ensure sandbox is initialized
             await self._ensure_sandbox()
             
-            env_vars = {"GEMINI_API_KEY": config.GEMINI_API_KEY}
+            # Prepare init payload
+            init_payload = {"api_key": api_key}
+            if config.VISION_API_ENDPOINT:
+                init_payload["api_endpoint"] = config.VISION_API_ENDPOINT
+            if config.VISION_MODEL_ID:
+                init_payload["model_id"] = config.VISION_MODEL_ID
+            
+            payload_json = json.dumps(init_payload)
             init_response = await self.sandbox.process.exec(
-                "curl -s -X POST 'http://localhost:8004/api/init' -H 'Content-Type: application/json' -d '{\"api_key\": \"'$GEMINI_API_KEY'\"}'",
+                f'curl -s -X POST \'http://localhost:8004/api/init\' -H \'Content-Type: application/json\' -d \'{payload_json}\'',
                 timeout=30,
-                env=env_vars
+                env={}
             )
             
             if init_response.exit_code != 0:

@@ -166,11 +166,27 @@ class BrowserTool(SandboxToolsBase):
                         else:
                             # If the browser api is not healthy, we need to initialize it
                             logger.info("Stagehand API server responded but browser not initialized. Initializing...")
-                            # Pass API key securely as environment variable instead of command line argument
-                            env_vars = {"GEMINI_API_KEY": config.GEMINI_API_KEY}
+                            # Use custom vision API if configured, otherwise fall back to Gemini
+                            api_key = config.VISION_API_KEY or config.GEMINI_API_KEY
+                            api_endpoint = config.VISION_API_ENDPOINT
+                            model_id = config.VISION_MODEL_ID
+                            
+                            if not api_key:
+                                logger.warning("No vision API key configured (VISION_API_KEY or GEMINI_API_KEY)")
+                                return False
+                            
+                            # Prepare init payload
+                            init_payload = {"api_key": api_key}
+                            if api_endpoint:
+                                init_payload["api_endpoint"] = api_endpoint
+                            if model_id:
+                                init_payload["model_id"] = model_id
+                            
+                            env_vars = {}
+                            payload_json = json.dumps(init_payload)
 
                             response = await self.sandbox.process.exec(
-                                'curl -s -X POST "http://localhost:8004/api/init" -H "Content-Type: application/json" -d "{\\"api_key\\": \\"$GEMINI_API_KEY\\"}"',
+                                f'curl -s -X POST "http://localhost:8004/api/init" -H "Content-Type: application/json" -d \'{payload_json}\'',
                                 timeout=90,
                                 env=env_vars
                             )
@@ -210,9 +226,10 @@ class BrowserTool(SandboxToolsBase):
     async def _execute_stagehand_api(self, endpoint: str, params: dict = None, method: str = "POST") -> ToolResult:
         """Execute a Stagehand action through the sandbox API"""
         try:
-            # Check if Gemini API key is configured
-            if not config.GEMINI_API_KEY:
-                return self.fail_response("Browser tool is not available. GEMINI_API_KEY is not configured.")
+            # Check if at least one vision API key is configured
+            api_key = config.VISION_API_KEY or config.GEMINI_API_KEY
+            if not api_key:
+                return self.fail_response("Browser tool is not available. Please configure VISION_API_KEY or GEMINI_API_KEY.")
             
             # Ensure sandbox is initialized
             await self._ensure_sandbox()

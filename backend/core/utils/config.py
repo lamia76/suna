@@ -303,6 +303,11 @@ class Configuration:
     MORPH_API_KEY: Optional[str] = None
     GEMINI_API_KEY: Optional[str] = None
     
+    # Vision/Browser Tool API configuration (for local models)
+    VISION_API_KEY: Optional[str] = None
+    VISION_API_ENDPOINT: Optional[str] = None
+    VISION_MODEL_ID: Optional[str] = None
+    
     # Google Vertex AI configuration
     VERTEX_AI_PROJECT: Optional[str] = None
     VERTEX_AI_LOCATION: Optional[str] = "us-central1"
