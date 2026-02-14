@@ -20,6 +20,11 @@ from core.agentpress.prompt_caching import apply_anthropic_caching_strategy
 
 DEFAULT_TOKEN_THRESHOLD = 120000
 
+# Hard limit per tool result (e.g. search_results) to prevent 30k+ token blowups
+# ~8000 tokens ≈ 32k chars; keeps useful content while avoiding context overflow
+MAX_TOOL_RESULT_TOKENS = 8000
+MAX_TOOL_RESULT_CHARS = 32000  # ~8000 tokens * 4 chars/token
+
 class ContextManager:
     """Manages thread context including token counting and summarization."""
     
@@ -212,6 +217,33 @@ class ContextManager:
             return token_counter(model=model, messages=[system_to_count] + messages_to_count)
         else:
             return token_counter(model=model, messages=messages_to_count)
+
+    def apply_tool_result_hard_limit(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Apply hard char limit to ALL tool results. Runs before compression - ensures even
+        fast-path (skip compression) still truncates 30k+ token search results."""
+        if not messages:
+            return messages
+        result = []
+        for msg in messages:
+            if isinstance(msg, dict) and self.is_tool_result_message(msg):
+                content = msg.get('content', '')
+                if isinstance(content, str) and len(content) > MAX_TOOL_RESULT_CHARS:
+                    m = msg.copy()
+                    m['content'] = self.safe_truncate(content, MAX_TOOL_RESULT_CHARS)
+                    result.append(m)
+                elif isinstance(content, dict):
+                    json_str = json.dumps(content)
+                    if len(json_str) > MAX_TOOL_RESULT_CHARS:
+                        m = msg.copy()
+                        m['content'] = self.safe_truncate(content, MAX_TOOL_RESULT_CHARS)
+                        result.append(m)
+                    else:
+                        result.append(msg)
+                else:
+                    result.append(msg)
+            else:
+                result.append(msg)
+        return result
 
     def is_tool_result_message(self, msg: Dict[str, Any]) -> bool:
         """Check if a message is a tool result message."""
@@ -690,33 +722,42 @@ class ContextManager:
                 return msg_content
   
     async def compress_tool_result_messages(self, messages: List[Dict[str, Any]], llm_model: str, max_tokens: Optional[int], token_threshold: int = 1000, uncompressed_total_token_count: Optional[int] = None) -> List[Dict[str, Any]]:
-        """Compress the tool result messages except the most recent N (configured by keep_recent_tool_outputs).
+        """Compress the tool result messages.
         
+        P0: Always apply hard token limit (MAX_TOOL_RESULT_TOKENS) to every tool result to prevent
+        search_results etc. from blowing up context (e.g. 30k+ tokens per result).
+        
+        Then, if total context over limit, compress old tool outputs more aggressively.
         Compression is deterministic (simple truncation), ensuring consistent results across requests.
-        This allows prompt caching (applied later) to produce cache hits on identical compressed content.
         """
         if uncompressed_total_token_count is None:
             uncompressed_total_token_count = await self.count_tokens(llm_model, messages)
 
         max_tokens_value = max_tokens or (100 * 1000)
 
-        if uncompressed_total_token_count > max_tokens_value:
-            _i = 0  # Count the number of ToolResult messages
-            for msg in reversed(messages):  # Start from the end and work backwards
-                if not isinstance(msg, dict):
-                    continue  # Skip non-dict messages
-                if self.is_tool_result_message(msg):  # Only compress ToolResult messages
-                    _i += 1  # Count the number of ToolResult messages
-                    msg_token_count = token_counter(messages=[msg])  # Count the number of tokens in the message
-                    if msg_token_count > token_threshold:  # If the message is too long
-                        if _i > self.keep_recent_tool_outputs:  # If this is not one of the most recent N ToolResult messages
-                            message_id = msg.get('message_id')  # Get the message_id
-                            if message_id:
-                                msg["content"] = self.compress_message(msg["content"], message_id, token_threshold * 3)
-                            else:
-                                logger.warning(f"UNEXPECTED: Message has no message_id {str(msg)[:100]}")
+        _i = 0
+        for msg in reversed(messages):
+            if not isinstance(msg, dict):
+                continue
+            if self.is_tool_result_message(msg):
+                _i += 1
+                msg_token_count = token_counter(model=llm_model, messages=[msg])
+
+                # P0: Hard limit - truncate ANY tool result exceeding MAX_TOOL_RESULT_TOKENS
+                # Prevents search_results (11k-33k) from consuming entire context
+                if msg_token_count > MAX_TOOL_RESULT_TOKENS:
+                    msg["content"] = self.safe_truncate(msg["content"], MAX_TOOL_RESULT_CHARS)
+                    logger.debug(f"Tool result truncated: {msg_token_count} -> ~{MAX_TOOL_RESULT_TOKENS} tokens (hard limit)")
+                    msg_token_count = MAX_TOOL_RESULT_TOKENS  # Approx for downstream logic
+
+                # If total context over limit, compress old tool outputs more aggressively
+                if uncompressed_total_token_count > max_tokens_value and msg_token_count > token_threshold:
+                    if _i > self.keep_recent_tool_outputs:
+                        message_id = msg.get('message_id')
+                        if message_id:
+                            msg["content"] = self.compress_message(msg["content"], message_id, token_threshold * 3)
                         else:
-                            msg["content"] = self.safe_truncate(msg["content"], int(max_tokens_value * 2))
+                            logger.warning(f"UNEXPECTED: Message has no message_id {str(msg)[:100]}")
         return messages
 
     async def compress_user_messages(self, messages: List[Dict[str, Any]], llm_model: str, max_tokens: Optional[int], token_threshold: int = 1000, uncompressed_total_token_count: Optional[int] = None) -> List[Dict[str, Any]]:
@@ -843,16 +884,18 @@ class ContextManager:
 
         # Calculate target tokens (hysteresis: compress to 60% of max to avoid repeated compressions)
         target_tokens = int(max_tokens * self.compression_target_ratio)
-        logger.info(f"Compression threshold: {max_tokens}, target: {target_tokens} (ratio: {self.compression_target_ratio})")
+        # P1: Trigger compression at 85% of limit (not 100%) to avoid last-minute overflow
+        trigger_threshold = int(max_tokens * 0.85)
+        logger.info(f"Compression threshold: {max_tokens}, trigger: {trigger_threshold}, target: {target_tokens} (ratio: {self.compression_target_ratio})")
         
-        # Check if we're already under threshold - no compression needed!
-        if uncompressed_total_token_count <= max_tokens:
-            logger.info(f"✅ Token count ({uncompressed_total_token_count}) under threshold ({max_tokens}), skipping compression")
+        # Check if we're already under trigger threshold - no compression needed!
+        if uncompressed_total_token_count <= trigger_threshold:
+            logger.info(f"✅ Token count ({uncompressed_total_token_count}) under trigger ({trigger_threshold}), skipping compression")
             return self.middle_out_messages(result)
         
-        # PRIMARY STRATEGY: Remove old tool outputs if over threshold
-        if uncompressed_total_token_count > max_tokens:
-            logger.info(f"Context over limit ({uncompressed_total_token_count} > {max_tokens}), starting tiered compression...")
+        # PRIMARY STRATEGY: Remove old tool outputs if over trigger threshold
+        if uncompressed_total_token_count > trigger_threshold:
+            logger.info(f"Context over trigger ({uncompressed_total_token_count} > {trigger_threshold}), starting tiered compression...")
             
             # Tier 1: Remove old tool outputs
             updated_count = await self.update_old_tool_outputs_in_db(

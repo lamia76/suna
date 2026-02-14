@@ -422,13 +422,15 @@ class ThreadManager:
                             else:
                                 max_tokens = int(context_window * 0.84)
                             
-                            logger.info(f"⚡ Fast check: {last_total_tokens} + {new_msg_tokens} = {estimated_total} tokens (threshold: {max_tokens})")
+                            # P1: Trigger compression earlier (at 75% of limit) to avoid last-minute overflow
+                            compression_threshold = int(max_tokens * 0.75)
+                            logger.info(f"⚡ Fast check: {last_total_tokens} + {new_msg_tokens} = {estimated_total} tokens (threshold: {compression_threshold})")
                             
-                            if estimated_total < max_tokens:
+                            if estimated_total < compression_threshold:
                                 logger.info(f"✅ Under threshold, skipping compression")
                                 skip_fetch = True
                             else:
-                                logger.info(f"📊 Over threshold ({estimated_total} >= {max_tokens}), triggering compression")
+                                logger.info(f"📊 Over threshold ({estimated_total} >= {compression_threshold}), triggering compression")
                                 need_compression = True
                                 # Will fetch and compress below
                         else:
@@ -441,6 +443,10 @@ class ThreadManager:
             # Always fetch messages (needed for LLM call)
             # Fast path just skips compression, not fetching!
             messages = await self.get_llm_messages(thread_id)
+
+            # P0: Always apply hard limit to tool results (search_results etc.) - even when skipping compression
+            ctx_mgr = ContextManager()
+            messages = ctx_mgr.apply_tool_result_hard_limit(messages)
             
             # Handle auto-continue context
             if auto_continue_state['count'] > 0 and auto_continue_state['continuous_state'].get('accumulated_content'):

@@ -450,8 +450,28 @@ class PromptManager:
             openapi_schemas = tool_registry.get_openapi_schemas()
             
             if openapi_schemas:
-                # Convert schemas to JSON string
+                # P0: Limit tool schema size to reduce system prompt tokens (~58k -> lower)
+                MAX_SCHEMA_CHARS = 25000  # ~6k tokens; enough for tool names + params
                 schemas_json = json.dumps(openapi_schemas, indent=2)
+                if len(schemas_json) > MAX_SCHEMA_CHARS:
+                    condensed = []
+                    for s in openapi_schemas:
+                        fn = s.get('function', {})
+                        condensed.append({
+                            'function': {
+                                'name': fn.get('name', ''),
+                                'description': (fn.get('description', '') or '')[:200],
+                                'parameters': {
+                                    'type': 'object',
+                                    'properties': {k: {'type': v.get('type', 'string')} for k, v in (fn.get('parameters', {}).get('properties', {}) or {}).items()},
+                                    'required': fn.get('parameters', {}).get('required', []) or []
+                                }
+                            }
+                        })
+                    schemas_json = json.dumps(condensed, indent=2)
+                    if len(schemas_json) > MAX_SCHEMA_CHARS:
+                        schemas_json = schemas_json[:MAX_SCHEMA_CHARS] + '... (truncated)'
+                    logger.debug(f"Tool schemas condensed for system prompt: {len(openapi_schemas)} tools, ~{len(schemas_json)} chars")
                 
                 examples_content = f"""
 
