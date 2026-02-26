@@ -473,13 +473,21 @@ export function useAgentStream(
             case 'tool_completed':
             case 'tool_failed':
             case 'tool_error':
-              if (toolCall?.tool_index === parsedContent.tool_index) {
-                setToolCall(null);
-              }
+              // Always clear current tool step so UI never stays stuck (e.g. on browser_extract_content
+              // when tool_index was from a previous run or didn't match)
+              setToolCall(null);
+              break;
+            case 'thread_run_start':
+              // New run started: clear any stale tool step from previous run
+              setToolCall(null);
+              break;
+            case 'thread_run_end':
+              // Run ended: clear "executing" step so UI doesn't stay stuck
+              setToolCall(null);
               break;
             case 'finish':
-              // Optional: Handle finish reasons like 'xml_tool_limit_reached'
-              // Don't finalize here, wait for thread_run_end or completion message
+              // Stream finished (e.g. xml_tool_limit_reached, agent_terminated): clear tool step
+              setToolCall(null);
               break;
             case 'error':
               setError(parsedContent.message || 'Agent run failed');
