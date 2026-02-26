@@ -1094,16 +1094,20 @@ class ResponseProcessor:
             
             # Phase 3: Resource Cleanup - Cancel pending tasks and close generator
             try:
-                # Cancel all pending tool execution tasks when stopping
+                # Cancel only tool execution tasks that are still running (not yet done)
+                # Log only when we actually cancel; tasks already completed in the "Waiting for pending" block are done()
                 if pending_tool_executions:
-                    logger.info(f"Cancelling {len(pending_tool_executions)} pending tool executions due to stop/cancellation")
+                    cancelled_count = 0
                     for execution in pending_tool_executions:
                         task = execution.get("task")
                         if task and not task.done():
                             try:
                                 task.cancel()
+                                cancelled_count += 1
                             except Exception as cancel_err:
                                 logger.warning(f"Error cancelling tool execution task: {cancel_err}")
+                    if cancelled_count > 0:
+                        logger.info(f"Cancelling {cancelled_count} pending tool execution(s) due to stop/cancellation")
                 
                 # Try to close the LLM response generator if it supports aclose()
                 # This helps stop the underlying HTTP connection from continuing
