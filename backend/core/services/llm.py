@@ -8,6 +8,7 @@ using LiteLLM with simplified error handling and clean parameter management.
 from typing import Union, Dict, Any, Optional, AsyncGenerator, List
 import os
 import asyncio
+import copy
 import litellm
 from litellm.router import Router
 from litellm.files.main import ModelResponse
@@ -31,7 +32,71 @@ litellm.drop_params = True
 
 # Constants
 MAX_RETRIES = 3
+# Fallback when vision API is not configured or call fails (same concept as browser: use vision API)
+PLACEHOLDER_NO_VISION = "[Image omitted - vision API not configured or unavailable]"
 provider_router = None
+
+
+def _get_vision_api_config() -> Optional[Dict[str, Any]]:
+    """Return vision API config (same as browser/Stagehand: VISION_API_KEY, VISION_API_ENDPOINT, VISION_MODEL_ID)."""
+    api_key = getattr(config, "VISION_API_KEY", None) or getattr(config, "GEMINI_API_KEY", None)
+    if not api_key:
+        return None
+    endpoint = getattr(config, "VISION_API_ENDPOINT", None)
+    model_id = getattr(config, "VISION_MODEL_ID", None) or "gpt-4o-mini"
+    return {"api_key": api_key, "api_base": endpoint, "model_id": model_id}
+
+
+async def _describe_image_with_vision_api(image_url: str) -> str:
+    """Call the same vision API used by browser (VISION_*) to get a short text description of the image."""
+    cfg = _get_vision_api_config()
+    if not cfg or not cfg.get("api_key"):
+        return PLACEHOLDER_NO_VISION
+    try:
+        # OpenAI-compatible vision call: same pattern as LiteLLM custom endpoint
+        model = f"openai/{cfg['model_id']}"
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Describe this image briefly in one or two sentences."},
+                    {"type": "image_url", "image_url": {"url": image_url}},
+                ],
+            }
+        ]
+        response = await litellm.acompletion(
+            model=model,
+            api_key=cfg["api_key"],
+            api_base=cfg.get("api_base"),
+            messages=messages,
+            max_tokens=300,
+        )
+        if response and response.choices and len(response.choices) > 0:
+            content = getattr(response.choices[0].message, "content", None) or ""
+            return (content or "").strip() or PLACEHOLDER_NO_VISION
+    except Exception as e:
+        logger.warning(f"Vision API description failed: {e}")
+    return PLACEHOLDER_NO_VISION
+
+
+async def _replace_images_with_vision_descriptions(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """For each message with image_url parts, call vision API and replace with text (same API as browser)."""
+    out = []
+    for msg in messages:
+        msg = copy.deepcopy(msg)
+        content = msg.get("content")
+        if isinstance(content, list):
+            new_parts = []
+            for part in content:
+                if isinstance(part, dict) and part.get("type") == "image_url":
+                    url = (part.get("image_url") or {}).get("url") or ""
+                    desc = await _describe_image_with_vision_api(url)
+                    new_parts.append({"type": "text", "text": f"[Image description: {desc}]"})
+                else:
+                    new_parts.append(part)
+            msg["content"] = new_parts
+        out.append(msg)
+    return out
 
 
 class LLMError(Exception):
@@ -198,7 +263,14 @@ async def make_llm_api_call(
         resolved_model_name = f"openrouter/openai/gpt-5-nano"
     
     params = model_manager.get_litellm_params(resolved_model_name, **override_params)
-    
+
+    # If model does not support vision, use same vision API as browser (VISION_*) to describe images and inject text
+    model = model_manager.get_model(resolved_model_name)
+    if model is not None and not getattr(model, "supports_vision", True):
+        if params.get("messages"):
+            params["messages"] = await _replace_images_with_vision_descriptions(params["messages"])
+            logger.info(f"Replaced image content with vision API descriptions for non-vision model: {resolved_model_name}")
+
     logger.debug(f"Parameters from model_manager.get_litellm_params: {params}")
     
     if model_id:
