@@ -59,11 +59,12 @@ export async function middleware(request: NextRequest) {
     request,
   });
 
-  // Use the request host to determine Supabase URL
-  // This allows the app to work from both localhost:9990 and kortix.syhc.dev
+  // Use NEXT_PUBLIC_SUPABASE_URL when set (Docker / separate Supabase); otherwise request host (same-domain proxy)
   const host = request.headers.get('host') || 'localhost:9990'
   const protocol = request.headers.get('x-forwarded-proto') || 'http'
-  const supabaseUrl = `${protocol}://${host}`
+  const supabaseUrl =
+    process.env.NEXT_PUBLIC_SUPABASE_URL ||
+    `${protocol}://${host}`
 
   const supabase = createServerClient(
     supabaseUrl,
