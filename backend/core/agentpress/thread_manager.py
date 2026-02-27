@@ -239,7 +239,26 @@ class ThreadManager:
         except Exception as e:
             logger.error(f"Failed to get messages for thread {thread_id}: {str(e)}", exc_info=True)
             return []
-    
+
+    async def get_messages(self, thread_id: str) -> List[Dict[str, Any]]:
+        """Get raw messages for a thread (message_id, type). Used by tools for counting/clearing by type."""
+        try:
+            client = await self.db.client
+            result = await client.table('messages').select('message_id, type').eq('thread_id', thread_id).eq('is_llm_message', True).order('created_at').execute()
+            return result.data or []
+        except Exception as e:
+            logger.error(f"Failed to get messages for thread {thread_id}: {str(e)}", exc_info=True)
+            return []
+
+    async def delete_message(self, thread_id: str, message_id: str) -> None:
+        """Delete a message from the thread."""
+        try:
+            client = await self.db.client
+            await client.table('messages').delete().eq('thread_id', thread_id).eq('message_id', message_id).eq('is_llm_message', True).execute()
+        except Exception as e:
+            logger.error(f"Failed to delete message {message_id} from thread {thread_id}: {str(e)}", exc_info=True)
+            raise
+
     async def run_thread(
         self,
         thread_id: str,

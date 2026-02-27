@@ -86,24 +86,24 @@ services:
       - suna_network
 
   frontend:
-    image: ghcr.io/flyflypeng/suna-frontend:v0.2
+    image: ghcr.io/flyflypeng/suna-frontend:v0.3
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        - NEXT_PUBLIC_SUPABASE_URL=${NEXT_PUBLIC_SUPABASE_URL}
+        - NEXT_PUBLIC_SUPABASE_ANON_KEY=${NEXT_PUBLIC_SUPABASE_ANON_KEY}
+        - NEXT_PUBLIC_BACKEND_URL=${NEXT_PUBLIC_BACKEND_URL:-http://localhost:8000/v1}
+        - NEXT_PUBLIC_URL=${NEXT_PUBLIC_URL:-http://localhost:9990}
+        - NEXT_PUBLIC_GOOGLE_CLIENT_ID=${NEXT_PUBLIC_GOOGLE_CLIENT_ID}
+        - NEXT_PUBLIC_POSTHOG_KEY=${NEXT_PUBLIC_POSTHOG_KEY}
+        - NEXT_PUBLIC_ENV_MODE=${NEXT_PUBLIC_ENV_MODE:-staging}
+        - NEXT_PUBLIC_NOVU_APP_IDENTIFIER=${NEXT_PUBLIC_NOVU_APP_IDENTIFIER}
+        - NEXT_PUBLIC_DISABLE_MOBILE_ADVERTISING=${NEXT_PUBLIC_DISABLE_MOBILE_ADVERTISING}
+        - BACKEND_INTERNAL_URL=http://backend:8000
     init: true
     env_file:
       - ./frontend/.env.local
-    # build:
-    #  context: ./frontend
-    #  dockerfile: Dockerfile
-    #  args:
-    #    - NEXT_PUBLIC_SUPABASE_URL=${NEXT_PUBLIC_SUPABASE_URL}
-    #    - NEXT_PUBLIC_SUPABASE_ANON_KEY=${NEXT_PUBLIC_SUPABASE_ANON_KEY}
-    #    - NEXT_PUBLIC_BACKEND_URL=${NEXT_PUBLIC_BACKEND_URL:-http://localhost:8000/v1}
-    #    - NEXT_PUBLIC_URL=${NEXT_PUBLIC_URL:-http://localhost:9990}
-    #    - NEXT_PUBLIC_GOOGLE_CLIENT_ID=${NEXT_PUBLIC_GOOGLE_CLIENT_ID}
-    #    - NEXT_PUBLIC_POSTHOG_KEY=${NEXT_PUBLIC_POSTHOG_KEY}
-    #    - NEXT_PUBLIC_ENV_MODE=${NEXT_PUBLIC_ENV_MODE:-staging}
-    #    - NEXT_PUBLIC_NOVU_APP_IDENTIFIER=${NEXT_PUBLIC_NOVU_APP_IDENTIFIER}
-    #    - NEXT_PUBLIC_DISABLE_MOBILE_ADVERTISING=${NEXT_PUBLIC_DISABLE_MOBILE_ADVERTISING}
-    #    - BACKEND_INTERNAL_URL=http://backend:8000
     ports:
       - "9990:3000"
     depends_on:
