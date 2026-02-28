@@ -5,13 +5,14 @@
 - 排除的工具（从通用工具统计中排除，由专项分析器处理）
 - 上下文管理工具（可选，用于 context 专项分析）
 - 内存管理工具（可选，用于 memory 专项分析）
+- 日志目录（适配不同项目结构）
 - 事件类型映射、字段映射（可扩展以支持不同日志格式）
 
 用法:
   python -m core.observability.viewer --file path/to/metrics.jsonl
-  python -m core.observability.viewer --agent-type agentpress   # 使用 AgentPress 预设
-  python -m core.observability.viewer --agent-type generic      # 通用模式（无排除）
-  python -m core.observability.viewer --config agent_config.json  # 自定义配置
+  python -m core.observability.viewer --log-dir /path/to/logs   # 指定日志目录（自动选最新）
+  METRICS_LOG_DIR=/var/log/agent python -m core.observability.viewer  # 环境变量
+  python -m core.observability.viewer --config agent_config.json  # 配置含 log_dir
 """
 
 import json
@@ -23,12 +24,11 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Set
 import argparse
 
-LOG_FILE = "metrics_logs.jsonl"
-
 # --- 预设配置 ---
 AGENT_PRESETS: Dict[str, Dict[str, Any]] = {
     "agentpress": {
         "description": "AgentPress 预设：排除任务/内存工具，做专项分析",
+        "log_dir": None,
         "excluded_tools": {"create_tasks", "update_tasks", "view_tasks", "complete", "manage_core_memory"},
         "context_tools": {"create_tasks", "update_tasks", "view_tasks", "complete"},
         "memory_tools": {"manage_core_memory"},
@@ -49,6 +49,7 @@ AGENT_PRESETS: Dict[str, Dict[str, Any]] = {
     },
     "generic": {
         "description": "通用预设：不排除任何工具，适用于任意 agent",
+        "log_dir": None,
         "excluded_tools": set(),
         "context_tools": None,  # 不启用 context 专项分析
         "memory_tools": None,   # 不启用 memory 专项分析
@@ -74,6 +75,7 @@ AGENT_PRESETS: Dict[str, Dict[str, Any]] = {
 class ViewerConfig:
     """Viewer 运行配置"""
 
+    log_dir: Optional[str] = None
     excluded_tools: Set[str] = field(default_factory=set)
     context_tools: Optional[Set[str]] = None
     memory_tools: Optional[Set[str]] = None
@@ -104,6 +106,7 @@ class ViewerConfig:
             raise ValueError(f"Unknown preset: {name}. Available: {list(AGENT_PRESETS.keys())}")
         d = preset.copy()
         return cls(
+            log_dir=d.get("log_dir"),
             excluded_tools=set(d.get("excluded_tools", [])),
             context_tools=set(d["context_tools"]) if d.get("context_tools") else None,
             memory_tools=set(d["memory_tools"]) if d.get("memory_tools") else None,
@@ -114,6 +117,7 @@ class ViewerConfig:
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "ViewerConfig":
         return cls(
+            log_dir=d.get("log_dir"),
             excluded_tools=set(d.get("excluded_tools", [])),
             context_tools=set(d["context_tools"]) if d.get("context_tools") else None,
             memory_tools=set(d["memory_tools"]) if d.get("memory_tools") else None,
@@ -423,10 +427,21 @@ def run_analyzers(logs: List[Dict], config: ViewerConfig) -> None:
     analyze_tools(logs, config)
 
 
-def resolve_log_file(file_arg: Optional[str]) -> str:
+def resolve_log_file(
+    file_arg: Optional[str],
+    log_dir: Optional[str] = None,
+) -> str:
+    """解析日志文件路径。优先级：--file > --log-dir/config.log_dir > METRICS_LOG_DIR > {cwd}/logs"""
     if file_arg:
         return file_arg
-    logs_dir = os.path.join(os.getcwd(), "logs")
+
+    logs_dir = (
+        log_dir
+        or os.environ.get("METRICS_LOG_DIR")
+        or os.path.join(os.getcwd(), "logs")
+    )
+    logs_dir = os.path.abspath(os.path.expanduser(logs_dir))
+
     if os.path.exists(logs_dir):
         log_files = []
         pattern = re.compile(r"^metrics_logs_(\d{8}_\d{6})\.jsonl$")
@@ -442,7 +457,10 @@ def resolve_log_file(file_arg: Optional[str]) -> str:
             path = os.path.join(logs_dir, latest)
             print(f"Using latest log file: {path}")
             return path
-    return LOG_FILE
+
+    fallback = os.path.join(logs_dir, "metrics_logs.jsonl")
+    print(f"No timestamped logs in {logs_dir}, fallback to {fallback}")
+    return fallback
 
 
 def main() -> None:
@@ -459,6 +477,11 @@ def main() -> None:
         help=f"Preset config. Default: agentpress. Options: {', '.join(AGENT_PRESETS.keys())}",
     )
     parser.add_argument("--config", "-c", help="Path to custom JSON config file (overrides --agent-type)")
+    parser.add_argument(
+        "--log-dir",
+        "-d",
+        help="Log directory (auto-select latest metrics_logs_*.jsonl). Overrides config and METRICS_LOG_DIR",
+    )
     args = parser.parse_args()
 
     if args.config:
@@ -468,7 +491,8 @@ def main() -> None:
         config = ViewerConfig.from_preset(args.agent_type)
         print(f"Using preset: {args.agent_type}")
 
-    log_file = resolve_log_file(args.file)
+    log_dir = args.log_dir or config.log_dir
+    log_file = resolve_log_file(args.file, log_dir=log_dir)
     logs = load_logs(log_file)
 
     if not logs:

@@ -1,0 +1,32 @@
+{
+  "description": "Suna 项目专用配置，匹配 LocalMetricsCollector 的日志格式与 backend 目录结构",
+  "log_dir": "logs",
+  "excluded_tools": [
+    "create_tasks",
+    "update_tasks",
+    "view_tasks",
+    "complete",
+    "manage_core_memory"
+  ],
+  "context_tools": [
+    "create_tasks",
+    "update_tasks",
+    "view_tasks",
+    "complete"
+  ],
+  "memory_tools": ["manage_core_memory"],
+  "event_types": {
+    "tool_execution": "tool_execution",
+    "llm_call": "llm_call",
+    "agent_execution": "agent_execution",
+    "agent_sandbox": "agent_sandbox"
+  },
+  "field_mapping": {
+    "tool_name": "tool_name",
+    "duration_ms": "duration_ms",
+    "success": "success",
+    "model": "model",
+    "prompt_tokens": "prompt_tokens",
+    "completion_tokens": "completion_tokens"
+  }
+}

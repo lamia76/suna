@@ -1,5 +1,6 @@
 {
   "description": "Viewer 配置示例 - 可根据不同 agent 复制并修改",
+  "log_dir": null,
   "excluded_tools": [],
   "context_tools": null,
   "memory_tools": null,
