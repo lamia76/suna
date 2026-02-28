@@ -1,0 +1,20 @@
+{
+  "description": "Viewer 配置示例 - 可根据不同 agent 复制并修改",
+  "excluded_tools": [],
+  "context_tools": null,
+  "memory_tools": null,
+  "event_types": {
+    "tool_execution": "tool_execution",
+    "llm_call": "llm_call",
+    "agent_execution": "agent_execution",
+    "agent_sandbox": "agent_sandbox"
+  },
+  "field_mapping": {
+    "tool_name": "tool_name",
+    "duration_ms": "duration_ms",
+    "success": "success",
+    "model": "model",
+    "prompt_tokens": "prompt_tokens",
+    "completion_tokens": "completion_tokens"
+  }
+}
